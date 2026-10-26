@@ -73,54 +73,26 @@ The skill maintains two layers of context:
 - `ssh` and `scp` available in your terminal
 - `jq` installed locally: `brew install jq` (macOS) · `apt-get install -y jq` (Linux)
 
-### Option 1: Cursor (Recommended)
+### Manual install (Cursor, Claude Code without plugins, OpenClaw, others)
 
-**Personal skill** (available in all your projects):
-
-```bash
-# Works for both first install and future updates — run anytime
-git clone https://github.com/michael-ltm/linux-server-skill.git ~/.cursor/skills/linux-server-ops 2>/dev/null \
-  || git -C ~/.cursor/skills/linux-server-ops pull origin main
-```
-
-**Project skill** (shared with your team via git):
+The skill lives in `skills/linux-server-ops/` inside this repo. Clone the repo once, then link that subfolder into your agent's skills directory:
 
 ```bash
-mkdir -p .cursor/skills
-git clone https://github.com/michael-ltm/linux-server-skill.git .cursor/skills/linux-server-ops 2>/dev/null \
-  || git -C .cursor/skills/linux-server-ops pull origin main
+# Clone or update (safe to re-run)
+git clone https://github.com/michael-ltm/linux-server-skill.git ~/.local/share/linux-server-skill 2>/dev/null \
+  || git -C ~/.local/share/linux-server-skill pull origin main
+
+# Link into your agent (pick the ones you use)
+mkdir -p ~/.cursor/skills   && ln -sfn ~/.local/share/linux-server-skill/skills/linux-server-ops ~/.cursor/skills/linux-server-ops
+mkdir -p ~/.claude/skills   && ln -sfn ~/.local/share/linux-server-skill/skills/linux-server-ops ~/.claude/skills/linux-server-ops
+mkdir -p ~/.openclaw/skills && ln -sfn ~/.local/share/linux-server-skill/skills/linux-server-ops ~/.openclaw/skills/linux-server-ops
 ```
 
-Restart Cursor. The skill is automatically discovered — no configuration needed.
+For a **project skill** shared via git, copy the folder instead: `cp -R ~/.local/share/linux-server-skill/skills/linux-server-ops .cursor/skills/`.
 
-### Option 2: Claude Code (claude.ai/code · Anthropic)
+Restart the agent. The entry point is `SKILL.md`; guide files are loaded on demand. Updating is the same `git pull` — the symlinks pick it up.
 
-```bash
-git clone https://github.com/michael-ltm/linux-server-skill.git ~/.claude/skills/linux-server-ops 2>/dev/null \
-  || git -C ~/.claude/skills/linux-server-ops pull origin main
-```
-
-The agent reads skills from `~/.claude/skills/` automatically when you start a session.
-
-### Option 3: OpenClaw
-
-```bash
-git clone https://github.com/michael-ltm/linux-server-skill.git ~/.openclaw/skills/linux-server-ops 2>/dev/null \
-  || git -C ~/.openclaw/skills/linux-server-ops pull origin main
-```
-
-Or configure the skill path in OpenClaw's settings panel to point to the cloned directory.
-
-### Option 4: Any AI Coding Assistant (Generic)
-
-```bash
-git clone https://github.com/michael-ltm/linux-server-skill.git /path/to/skills/linux-server-ops 2>/dev/null \
-  || git -C /path/to/skills/linux-server-ops pull origin main
-```
-
-The main entry point is `SKILL.md`. The agent reads it first, then loads referenced guide files on demand.
-
-> **How it works**: `git clone` succeeds on first install. If the directory already exists it fails silently (`2>/dev/null`), then `||` triggers `git pull` to update instead. One command, works every time.
+> Paths below use `~/.cursor/skills/linux-server-ops`. With Claude Code use `~/.claude/skills/linux-server-ops` instead (plugin installs: ask the agent where the skill lives).
 
 ---
 
@@ -186,11 +158,12 @@ Upload and run the init script on your server. This installs Nginx, Certbot, fai
 scp -i ~/.ssh/my_key ~/.cursor/skills/linux-server-ops/scripts/check-system.sh ubuntu@1.2.3.4:/tmp/
 scp -i ~/.ssh/my_key ~/.cursor/skills/linux-server-ops/scripts/generate-index.sh ubuntu@1.2.3.4:/tmp/
 scp -i ~/.ssh/my_key ~/.cursor/skills/linux-server-ops/scripts/service-registry.sh ubuntu@1.2.3.4:/tmp/
+scp -i ~/.ssh/my_key ~/.cursor/skills/linux-server-ops/scripts/service-control.sh ubuntu@1.2.3.4:/tmp/
 
 # Run bootstrap
 ssh -i ~/.ssh/my_key ubuntu@1.2.3.4 'sudo bash /tmp/check-system.sh'
 # Install management scripts on server
-ssh -i ~/.ssh/my_key ubuntu@1.2.3.4 'sudo mkdir -p /opt/server-tools && sudo mv /tmp/generate-index.sh /tmp/service-registry.sh /opt/server-tools/ && sudo chmod +x /opt/server-tools/*.sh'
+ssh -i ~/.ssh/my_key ubuntu@1.2.3.4 'sudo mkdir -p /opt/server-tools && sudo mv /tmp/generate-index.sh /tmp/service-registry.sh /tmp/service-control.sh /opt/server-tools/ && sudo chmod +x /opt/server-tools/*.sh'
 ```
 
 ### Step 4 — Start using it
@@ -276,6 +249,8 @@ bash ~/.cursor/skills/linux-server-ops/scripts/sync-context.sh staging
 | `scripts/sync-context.sh --all` | Sync all configured servers |
 | `scripts/sync-context.sh --list` | List all configured servers |
 | `scripts/sync-context.sh --show [id]` | Print snapshot details |
+| `scripts/ssh-proxy.sh ssh …` | `ssh`/`scp` wrapper that auto-routes through Clash/V2Ray/VPN |
+| `scripts/ssh-proxy.sh detect` | Show which local proxy was detected |
 
 ### Server-side scripts (uploaded to `/opt/server-tools/`)
 

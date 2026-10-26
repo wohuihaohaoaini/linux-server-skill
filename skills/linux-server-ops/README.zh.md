@@ -72,54 +72,26 @@ Skill 维护两层上下文，新会话无需重复描述服务器环境：
 - 终端中可用 `ssh` 和 `scp`
 - 本地安装 `jq`：`brew install jq`（macOS）· `apt-get install -y jq`（Linux）
 
-### 方式一：Cursor（推荐）
+### 手动安装（Cursor、不用插件的 Claude Code、OpenClaw 等）
 
-**个人 Skill**（所有项目均可使用）：
-
-```bash
-# 首次安装和后续更新都用这一条命令，随时可以重复执行
-git clone https://github.com/michael-ltm/linux-server-skill.git ~/.cursor/skills/linux-server-ops 2>/dev/null \
-  || git -C ~/.cursor/skills/linux-server-ops pull origin main
-```
-
-**项目 Skill**（通过 git 与团队共享）：
+Skill 本体在仓库的 `skills/linux-server-ops/` 子目录。先把仓库克隆一次，再把这个子目录链接到对应 AI 助手的 skills 目录：
 
 ```bash
-mkdir -p .cursor/skills
-git clone https://github.com/michael-ltm/linux-server-skill.git .cursor/skills/linux-server-ops 2>/dev/null \
-  || git -C .cursor/skills/linux-server-ops pull origin main
+# 克隆或更新（可重复执行）
+git clone https://github.com/michael-ltm/linux-server-skill.git ~/.local/share/linux-server-skill 2>/dev/null \
+  || git -C ~/.local/share/linux-server-skill pull origin main
+
+# 链接到你用的助手（按需选择）
+mkdir -p ~/.cursor/skills   && ln -sfn ~/.local/share/linux-server-skill/skills/linux-server-ops ~/.cursor/skills/linux-server-ops
+mkdir -p ~/.claude/skills   && ln -sfn ~/.local/share/linux-server-skill/skills/linux-server-ops ~/.claude/skills/linux-server-ops
+mkdir -p ~/.openclaw/skills && ln -sfn ~/.local/share/linux-server-skill/skills/linux-server-ops ~/.openclaw/skills/linux-server-ops
 ```
 
-重启 Cursor，Skill 自动被发现，无需额外配置。
+如果要作为**项目级 skill** 随 git 共享给团队，改为复制：`cp -R ~/.local/share/linux-server-skill/skills/linux-server-ops .cursor/skills/`。
 
-### 方式二：Claude Code（claude.ai/code · Anthropic）
+重启助手即可。入口文件是 `SKILL.md`，各 guide 按需加载。更新时重新执行上面的 `git pull`，符号链接会自动生效。
 
-```bash
-git clone https://github.com/michael-ltm/linux-server-skill.git ~/.claude/skills/linux-server-ops 2>/dev/null \
-  || git -C ~/.claude/skills/linux-server-ops pull origin main
-```
-
-Claude Code 会话启动时自动读取 `~/.claude/skills/` 下的所有 Skill。
-
-### 方式三：OpenClaw
-
-```bash
-git clone https://github.com/michael-ltm/linux-server-skill.git ~/.openclaw/skills/linux-server-ops 2>/dev/null \
-  || git -C ~/.openclaw/skills/linux-server-ops pull origin main
-```
-
-或在 OpenClaw 设置面板中将 Skill 路径指向克隆后的目录。
-
-### 方式四：其他 AI 编程助手（通用）
-
-```bash
-git clone https://github.com/michael-ltm/linux-server-skill.git /path/to/skills/linux-server-ops 2>/dev/null \
-  || git -C /path/to/skills/linux-server-ops pull origin main
-```
-
-主入口文件是 `SKILL.md`，Agent 优先读取它，按需加载引用的各 guide 文件。
-
-> **原理**：`git clone` 首次安装时成功执行；目录已存在时会报错但被 `2>/dev/null` 静默忽略，`||` 触发 `git pull` 自动更新。**一条命令，首次安装和后续更新通用。**
+> 下文路径以 `~/.cursor/skills/linux-server-ops` 为例；Claude Code 请替换为 `~/.claude/skills/linux-server-ops`（插件安装的用户可直接问 AI skill 所在路径）。
 
 ---
 
@@ -337,6 +309,8 @@ bash ~/.cursor/skills/linux-server-ops/scripts/sync-context.sh staging
 | `sync-context.sh --all` | 同步所有已配置服务器 |
 | `sync-context.sh --list` | 列出所有已配置服务器 |
 | `sync-context.sh --show [id]` | 打印快照详情 |
+| `ssh-proxy.sh ssh …` | 自动走 Clash/V2Ray/VPN 代理的 `ssh`/`scp` 封装 |
+| `ssh-proxy.sh detect` | 查看检测到的本地代理 |
 
 ### 服务器端脚本（上传至 `/opt/server-tools/`）
 
