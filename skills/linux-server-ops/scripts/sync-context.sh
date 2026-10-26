@@ -24,7 +24,14 @@ set -euo pipefail
 
 SERVERS_FILE=".server/servers.json"
 SNAPSHOTS_DIR=".server/snapshots"
-SKILL_DIR="$HOME/.cursor/skills/linux-server-ops"
+# Resolve the skill directory from this script's location, so it works whether
+# installed under ~/.claude, ~/.cursor, a project, or as a plugin
+SKILL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+# Proxy/VPN-aware SSH options (fills SSH_PROXY_OPTS via set_proxy_opts)
+# shellcheck source=ssh-proxy.sh
+. "$SKILL_DIR/scripts/ssh-proxy.sh"
+SSH_PROXY_OPTS=(-o ConnectTimeout=15)
 
 GREEN='\033[0;32m'; RED='\033[0;31m'; YELLOW='\033[1;33m'
 BLUE='\033[0;34m'; CYAN='\033[0;36m'; BOLD='\033[1m'; NC='\033[0m'
@@ -100,12 +107,13 @@ _ssh() {
   shift 5
   local cmd="$*"
 
-  local base_opts="-o StrictHostKeyChecking=no -o ConnectTimeout=15"
+  # accept-new: trust a host on first contact, but refuse if its key later changes
+  local base_opts=(-o StrictHostKeyChecking=accept-new "${SSH_PROXY_OPTS[@]}")
 
   case "$auth_type" in
     key)
       key=$(resolve_path "$key")
-      ssh -i "$key" -p "$port" $base_opts -o BatchMode=yes "$user@$host" "$cmd"
+      ssh -i "$key" -p "$port" "${base_opts[@]}" -o BatchMode=yes "$user@$host" "$cmd"
       ;;
     password)
       local pass="$_SSH_PASSWORD"
@@ -114,12 +122,13 @@ _ssh() {
         pass="${SSH_PASSWORD:-}"
       fi
       if [ -z "$pass" ]; then
-        echo -ne "${YELLOW}Password for $user@$host: ${NC}"
+        echo -ne "${YELLOW}Password for $user@$(mask_ip "$host"): ${NC}"
         read -rs pass
         echo ""
         _SSH_PASSWORD="$pass"   # cache for this session
       fi
-      sshpass -p "$pass" ssh -p "$port" $base_opts \
+      # sshpass -e reads SSHPASS from the environment; -p would expose it in `ps`
+      SSHPASS="$pass" sshpass -e ssh -p "$port" "${base_opts[@]}" \
         -o PreferredAuthentications=password \
         -o PubkeyAuthentication=no \
         "$user@$host" "$cmd"
@@ -135,12 +144,12 @@ _ssh() {
 _scp() {
   local auth_type="$1" port="$2" key="$3" src="$4" dest="$5"
 
-  local base_opts="-o StrictHostKeyChecking=no"
+  local base_opts=(-o StrictHostKeyChecking=accept-new "${SSH_PROXY_OPTS[@]}")
 
   case "$auth_type" in
     key)
       key=$(resolve_path "$key")
-      scp -i "$key" -P "$port" $base_opts "$src" "$dest"
+      scp -i "$key" -P "$port" "${base_opts[@]}" "$src" "$dest"
       ;;
     password)
       local pass="${_SSH_PASSWORD:-${SSH_PASSWORD:-}}"
@@ -150,7 +159,7 @@ _scp() {
         echo ""
         _SSH_PASSWORD="$pass"
       fi
-      sshpass -p "$pass" scp -P "$port" $base_opts \
+      SSHPASS="$pass" sshpass -e scp -P "$port" "${base_opts[@]}" \
         -o PreferredAuthentications=password \
         -o PubkeyAuthentication=no \
         "$src" "$dest"
@@ -418,7 +427,7 @@ cmd_sync() {
     require_sshpass
     # Pre-prompt password if not set
     if [ -z "${_SSH_PASSWORD:-}" ] && [ -z "${SSH_PASSWORD:-}" ]; then
-      echo -ne "${YELLOW}SSH Password for $user@$host: ${NC}"
+      echo -ne "${YELLOW}SSH Password for $user@$(mask_ip "$host"): ${NC}"
       read -rs _SSH_PASSWORD
       echo ""
     fi
@@ -430,6 +439,7 @@ cmd_sync() {
   info "Syncing: $server_id ($user@$(mask_ip "$host"):$port) [$auth_label]"
 
   # ── Test connection ──────────────────────────────────────────────────────────
+  set_proxy_opts
   info "Testing SSH connection..."
   if ! _ssh "$auth_type" "$host" "$port" "$user" "$key_path" 'echo ok' &>/dev/null; then
     fail "SSH connection failed"
