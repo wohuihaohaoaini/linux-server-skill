@@ -30,8 +30,8 @@ warn()  { echo -e "${YELLOW}!${NC} $1"; }
 info()  { echo -e "${BLUE}→${NC} $1"; }
 label() { echo -e "${GRAY}$1${NC}"; }
 
-REGISTRY="/etc/server-index.json"
-LEGACY_REGISTRY="/etc/server-registry.json"
+REGISTRY="/etc/server-index.json"          # scanned index (includes merged registry entries)
+LEGACY_REGISTRY="/etc/server-registry.json" # hand-maintained declarations (service-registry.sh)
 
 # ─── Detect service type ──────────────────────────────────────────────────────
 # Returns: pm2 | systemd | docker-compose | nginx | unknown

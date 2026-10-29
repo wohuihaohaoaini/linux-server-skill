@@ -60,6 +60,17 @@ touch_registry() {
   chmod 600 "$REGISTRY"
 }
 
+# ─── Rebuild /etc/server-index.json so registry changes show up in snapshots ──
+refresh_index() {
+  local gen
+  for gen in "$(dirname "$0")/generate-index.sh" /opt/server-tools/generate-index.sh; do
+    if [ -f "$gen" ]; then
+      bash "$gen" --quiet >/dev/null 2>&1 && info "Index refreshed" || warn "Index refresh failed (run generate-index.sh)"
+      return 0
+    fi
+  done
+}
+
 # ─── CMD: list ───────────────────────────────────────────────────────────────
 cmd_list() {
   local count
@@ -147,9 +158,10 @@ cmd_set() {
   local tmp
   tmp=$(mktemp)
   jq ".services[\"$name\"] = ($existing * $json)" "$REGISTRY" > "$tmp"
-  touch_registry
   mv "$tmp" "$REGISTRY"
   chmod 600 "$REGISTRY"
+  touch_registry
+  refresh_index
 
   ok "Registry updated for '$name'"
   echo ""
@@ -199,14 +211,21 @@ cmd_remove() {
     exit 1
   fi
 
-  read -rp "Remove '$name' from registry? [y/N] " confirm
+  # --yes skips the prompt (non-interactive SSH has no TTY to answer it)
+  local confirm="n"
+  if [ "${2:-}" = "--yes" ]; then
+    confirm="y"
+  else
+    read -rp "Remove '$name' from registry? [y/N] " confirm || confirm="n"
+  fi
   if [[ "$confirm" =~ ^[Yy]$ ]]; then
     local tmp
     tmp=$(mktemp)
     jq "del(.services[\"$name\"])" "$REGISTRY" > "$tmp"
-    touch_registry
     mv "$tmp" "$REGISTRY"
     chmod 600 "$REGISTRY"
+    touch_registry
+    refresh_index
     ok "Removed '$name' from registry"
   else
     info "Cancelled"
@@ -510,7 +529,7 @@ Commands:
   get <name>                    Show details for a service
   set <name> '<json>'           Add or update a service
   update-field <name> <f> <v>   Update a single field
-  remove <name>                 Remove a service from registry
+  remove <name> [--yes]         Remove a service from registry (--yes: no prompt)
   health                        Check health of all services
   summary                       Full server summary (services + DB + Docker)
   db                            Database status (MySQL/PG/Redis/Mongo)

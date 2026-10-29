@@ -106,22 +106,28 @@ Map distro → package manager and paths via [distro-guide.md](distro-guide.md).
 ## Step 2: Bootstrap Server (First Time)
 
 ```bash
-for s in check-system.sh service-registry.sh generate-index.sh service-control.sh; do
+TOOLS="service-registry.sh generate-index.sh service-control.sh backup.sh release.sh notify.sh"
+for s in check-system.sh $TOOLS; do
   $SP scp -i <key> -P <port> <skill_dir>/scripts/$s user@host:/tmp/
 done
-ssh … user@host 'sudo bash /tmp/check-system.sh && \
-  sudo mkdir -p /opt/server-tools && \
-  sudo mv /tmp/service-registry.sh /tmp/generate-index.sh /tmp/service-control.sh /opt/server-tools/ && \
-  sudo chmod +x /opt/server-tools/*.sh'
+ssh … user@host "sudo bash /tmp/check-system.sh && sudo mkdir -p /opt/server-tools /etc/server-tools && \
+  cd /tmp && sudo mv $TOOLS /opt/server-tools/ && sudo chmod +x /opt/server-tools/*.sh"
 ```
 
-Installs `nginx`, `certbot`, `fail2ban`, `ufw`/`firewalld`, `jq`, `htop`, `logrotate`, creates the standard directories, and initializes the server index. `sync-context.sh` also uploads any missing management scripts automatically.
+Installs `nginx`, `certbot`, `fail2ban`, `ufw`/`firewalld`, `jq`, `rsync`, `htop`, `logrotate`, creates the standard directories, and initializes the server index. `sync-context.sh` also uploads any missing management scripts automatically.
+
+Then, with the user: configure alerts (`notify.sh`, [monitoring-guide.md](monitoring-guide.md) → Alerting), schedule `backup.sh` with an offsite target ([backup-guide.md](backup-guide.md)), and add an external uptime monitor.
 
 ---
 
 ## Step 3: Server Index (Memory on Server)
 
-`/etc/server-index.json` is the server's own "panel database" — the single source of truth. Top-level keys:
+Two files, one view:
+
+- `/etc/server-registry.json` — **declared**: what you deployed and why (domain, git repo, env file, notes). Written only by `service-registry.sh set|remove`.
+- `/etc/server-index.json` — **observed**: full scan of the live server by `generate-index.sh`, with registry entries merged into `services[]` (`registered: true`; `detected: false` if declared but not running). This is what snapshots contain. `service-registry.sh set|remove` regenerates it automatically.
+
+Index top-level keys:
 
 | Key | Contents |
 |---|---|
@@ -196,7 +202,13 @@ Full per-type workflows: [deploy-guide.md](deploy-guide.md).
 
 Standard directories: app roots above, `/etc/nginx/sites-available/` (+ `sites-enabled/` symlinks), `/etc/systemd/system/`, `/var/log/apps/<name>/`, `/opt/server-tools/`, `/var/backups/`.
 
-**Every deploy ends with:** `nginx -t` passes → service enabled for boot → `curl -I` the domain/port → index updated → snapshot synced.
+**Every deploy of an existing app:**
+
+1. **Before:** `release.sh snapshot <name>` (plus `backup.sh run` if the release migrates the database).
+2. Deploy.
+3. **Verify readiness, not just a 200:** `nginx -t` → service running and enabled for boot → `/readyz` (or a real DB-backed request) answers → public HTTPS URL contains an expected keyword → no new errors in the log. Script: [deploy-guide.md](deploy-guide.md) → Post-Deploy Verification.
+4. **Any check fails → `release.sh rollback <name>` first, debug second.**
+5. `service-registry.sh set <name> '{…}'` → sync the local snapshot.
 
 ---
 
@@ -289,7 +301,11 @@ ssh … user@host "$SC logs <name> 200"
 
 ## Step 9: Monitor & Maintain
 
-Full setup: [monitoring-guide.md](monitoring-guide.md).
+Full setup: [monitoring-guide.md](monitoring-guide.md). Three layers, set up in this order:
+
+1. **External uptime monitor** (UptimeRobot, Uptime Kuma on another host, 云拨测) on each domain's health endpoint — the only thing that notices when the whole server is down.
+2. **Alerts via `notify.sh`** (企业微信 / 钉钉 / 飞书 / Telegram / Bark) from the watchdog, resource checks and backups. `mail` does not work on most VPSes (port 25 blocked).
+3. **On-demand checks** below.
 
 ```bash
 ssh … user@host 'sudo bash /opt/server-tools/service-registry.sh health'
@@ -297,6 +313,41 @@ ssh … user@host 'uptime && free -h && df -h /'
 ssh … user@host 'pm2 status 2>/dev/null; systemctl list-units --type=service --state=running --no-pager | tail -20'
 ssh … user@host 'sudo journalctl -p err --since "1h ago" --no-pager -n 30'
 ```
+
+---
+
+## Diagnosis Order
+
+When something is wrong, go in this order and stop at the first finding — each step is cheap and rules out a whole class of causes:
+
+1. **Running?** `service-control.sh status <name>`
+2. **Logs?** `service-control.sh logs <name> 200`, `/var/log/nginx/error.log`, `journalctl -p err --since "1h ago"`
+3. **Resources?** `df -h`, `df -i`, `free -h`, `uptime`, `dmesg | grep -i oom`
+4. **Network?** `ss -tlnp`, `curl -v localhost:<port>/readyz`, `dig +short <domain>`, firewall
+5. **Dependencies?** DB / Redis up and not full, external APIs, certificate expiry
+
+If the cause is a recent deploy, roll back before investigating further. Symptom table and capacity decisions (when to optimize vs. scale up vs. add swap): [monitoring-guide.md](monitoring-guide.md).
+
+---
+
+## Backup & Rollback
+
+Full guide: [backup-guide.md](backup-guide.md).
+
+```bash
+B='sudo bash /opt/server-tools/backup.sh'
+ssh … "$B run"                 # apps, configs, certs, MySQL/PostgreSQL/Redis dumps (+ offsite via rclone if configured)
+ssh … "$B list"
+ssh … "$B verify [<id>]"       # checksums + archive integrity
+ssh … "$B extract <id>"        # unpack into /var/backups/restore-<id>/ — never over live files
+
+R='sudo bash /opt/server-tools/release.sh'
+ssh … "$R snapshot <name>"     # before every deploy (cheap: hard-linked)
+ssh … "$R rollback <name>"     # restore files + restart; current state kept as *-pre-rollback
+```
+
+- Ask the user to set up an **offsite** target (`RCLONE_REMOTE` in `/etc/server-tools/backup.conf`) — a local-only backup dies with the server. Cloud credentials are entered by the user via `ssh -t … 'sudo rclone config'`, never through chat.
+- Restoring a database overwrites data: confirm with the user, and dump the current state first.
 
 ---
 
@@ -359,12 +410,12 @@ ssh … user@host 'sudo du -sh /var/log/nginx/ /var/log/apps/ && sudo journalctl
 
 ```bash
 ssh … user@host 'sudo bash /opt/server-tools/service-registry.sh cron'   # list all jobs
-ssh … user@host "echo '0 3 * * * root bash /opt/server-tools/backup.sh >> /var/log/backup.log 2>&1' | sudo tee /etc/cron.d/daily-backup"
+ssh … user@host "echo '30 3 * * * root bash /opt/server-tools/backup.sh run >> /var/log/backup.log 2>&1' | sudo tee /etc/cron.d/server-backup"
 ssh … user@host 'sudo rm /etc/cron.d/<job-name>'
 ssh … user@host 'systemctl list-timers --no-pager'                       # systemd timers
 ```
 
-`backup.sh` is defined in [security-guide.md](security-guide.md); `watchdog.sh` in [monitoring-guide.md](monitoring-guide.md).
+`watchdog.sh` and `resource-alert.sh` are defined in [monitoring-guide.md](monitoring-guide.md).
 
 ---
 
@@ -390,6 +441,8 @@ Full details: [security-guide.md](security-guide.md) and [waf-guide.md](waf-guid
 - [ ] `/etc/server-index.json`: `chmod 600 && chown root:root`
 - [ ] Automatic security updates (`unattended-upgrades` / `dnf-automatic`)
 - [ ] SFTP chroot for web-only users
+- [ ] Daily `backup.sh` with offsite copy; restore drill done in the last month
+- [ ] External uptime monitor + `notify.sh` alerts working (`notify.sh --test`)
 
 ---
 
@@ -397,11 +450,12 @@ Full details: [security-guide.md](security-guide.md) and [waf-guide.md](waf-guid
 
 | File | Contents |
 |------|---------|
+| [backup-guide.md](backup-guide.md) | Backups, offsite copies, restore procedures, deploy rollback |
 | [ssh-proxy-guide.md](ssh-proxy-guide.md) | SSH through Clash/V2Ray/VPN: detection, port table, troubleshooting |
 | [distro-guide.md](distro-guide.md) | Per-distro package commands, Nginx paths, PHP-FPM sockets |
 | [deploy-guide.md](deploy-guide.md) | Static, Node.js, Java, Python, PHP, Docker, database deployments |
 | [waf-guide.md](waf-guide.md) | ModSecurity, OWASP CRS, rate limiting, IP blocking, DDoS mitigation |
-| [monitoring-guide.md](monitoring-guide.md) | Metrics, alerting, Netdata, uptime monitoring, watchdog |
+| [monitoring-guide.md](monitoring-guide.md) | Webhook alerts, external uptime, health endpoints, diagnosis, scaling, swap |
 | [log-guide.md](log-guide.md) | Log viewing, searching, rotation, GoAccess, Loki/Promtail |
 | [file-ops-guide.md](file-ops-guide.md) | Browse, edit, permissions, compress, transfer, search |
 | [security-guide.md](security-guide.md) | SSH hardening, auditd, intrusion detection, kernel tuning, backups |
@@ -412,3 +466,6 @@ Full details: [security-guide.md](security-guide.md) and [waf-guide.md](waf-guid
 | [scripts/generate-index.sh](scripts/generate-index.sh) | Server: full scan → `/etc/server-index.json` |
 | [scripts/service-registry.sh](scripts/service-registry.sh) | Server: index management + health/db/docker/cron |
 | [scripts/service-control.sh](scripts/service-control.sh) | Server: unified start/stop/restart/reload/boot-check |
+| [scripts/backup.sh](scripts/backup.sh) | Server: full backup + DB dumps + offsite, verify, extract |
+| [scripts/release.sh](scripts/release.sh) | Server: pre-deploy snapshots and rollback |
+| [scripts/notify.sh](scripts/notify.sh) | Server: alerts to 企业微信/钉钉/飞书/Telegram/Bark/Slack |

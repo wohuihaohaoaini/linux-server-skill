@@ -459,7 +459,7 @@ cmd_sync() {
   info "Ensuring management scripts are on server..."
 
   local scripts_to_upload=()
-  for script in generate-index.sh service-registry.sh service-control.sh; do
+  for script in generate-index.sh service-registry.sh service-control.sh backup.sh release.sh notify.sh; do
     local remote_check
     remote_check=$(_ssh "$auth_type" "$host" "$port" "$user" "$key_path" \
       "[ -f /opt/server-tools/$script ] && echo exists || echo missing" 2>/dev/null || echo "missing")

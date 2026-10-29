@@ -334,6 +334,9 @@ bash ~/.cursor/skills/linux-server-ops/scripts/sync-context.sh staging
 | `service-control.sh boot-check` | 验证所有服务是否配置了开机自启 |
 | `service-control.sh boot-fix` | 一键修复所有未配置开机自启的服务 |
 | `service-control.sh logs <名称> [n]` | 查看最后 N 行日志 |
+| `backup.sh run` / `list` / `verify` / `extract <id>` | 全量备份（文件、配置、证书、MySQL/PostgreSQL/Redis），rclone 异地备份，完整性校验，安全恢复到暂存目录 |
+| `release.sh snapshot <名称>` / `rollback <名称>` | 部署前快照，一条命令回滚并重启 |
+| `notify.sh "<标题>" "<内容>" [级别]` | 告警推送到企业微信 / 钉钉 / 飞书 / Telegram / Bark / Slack |
 
 ---
 
@@ -345,10 +348,11 @@ bash ~/.cursor/skills/linux-server-ops/scripts/sync-context.sh staging
 | `distro-guide.md` | Ubuntu / Debian / CentOS / RHEL / Alpine / Arch 差异对比 |
 | `deploy-guide.md` | 完整部署流程：静态网站、Node.js、Java、Python、Go、PHP、Docker、数据库 |
 | `waf-guide.md` | ModSecurity、OWASP CRS、速率限制、IP 管理、DDoS 防护 |
-| `monitoring-guide.md` | 系统指标、告警、Netdata、Uptime Kuma、进程守护 |
+| `monitoring-guide.md` | Webhook 告警、外部可用性监控、健康检查接口、排查顺序、扩容判断、swap |
+| `backup-guide.md` | 备份、异地备份、恢复流程与演练、部署回滚 |
 | `log-guide.md` | 日志查看、搜索、轮转、GoAccess、Loki/Promtail |
 | `file-ops-guide.md` | 文件管理：浏览、编辑、权限、压缩、传输、搜索 |
-| `security-guide.md` | SSH 加固、auditd、内核调优、入侵检测、备份 |
+| `security-guide.md` | SSH 加固、auditd、内核调优、入侵检测 |
 | `user-management-guide.md` | 用户、组、sudo、SSH 密钥、SFTP chroot、会话审计 |
 
 ---
