@@ -17,6 +17,9 @@
 set -uo pipefail
 
 INDEX="/etc/server-index.json"
+# Hand-maintained declarations written by service-registry.sh (domain, git repo,
+# env file…). Merged into the scanned services below so the index has both.
+REGISTRY="/etc/server-registry.json"
 PRINT_ONLY=false
 QUIET=false
 
@@ -886,6 +889,34 @@ scan_backups() {
   fi
 }
 
+# ─── Registry merge ───────────────────────────────────────────────────────────
+# merge_registry <services-json> <websites-json>
+# Scanned values win when non-empty (they reflect live state); registry values
+# fill the gaps. Registered services the scan did not find are appended with
+# detected:false, unless they are already listed as Nginx websites.
+merge_registry() {
+  local services="$1" websites="$2"
+  if [ ! -f "$REGISTRY" ] || ! jq -e . "$REGISTRY" >/dev/null 2>&1; then
+    echo "$services"; return
+  fi
+  jq -n \
+    --argjson scanned "$services" \
+    --argjson sites "$websites" \
+    --slurpfile reg "$REGISTRY" '
+    ($reg[0].services // {}) as $r
+    | ($scanned | map(.name)) as $found
+    | ($sites | map(.name)) as $site_names
+    | ($scanned | map(
+        . as $s
+        | ($r[$s.name] // null) as $decl
+        | if $decl == null then $s
+          else $decl + ($s | with_entries(select(.value != null and .value != ""))) + {registered: true}
+          end))
+    + [ $r | to_entries[]
+        | select(.key as $k | ($found | index($k)) == null and ($site_names | index($k)) == null)
+        | .value + {name: .key, registered: true, detected: false} ]'
+}
+
 # ─── Main ─────────────────────────────────────────────────────────────────────
 main() {
   $PRINT_ONLY || require_root
@@ -901,6 +932,7 @@ main() {
   websites=$(scan_safe scan_websites '[]')
   log "  → services (pm2 + systemd)"
   services=$(scan_safe scan_services '[]')
+  services=$(merge_registry "$services" "$websites" || echo "$services")
   log "  → databases"
   databases=$(scan_safe scan_databases '[]')
   log "  → docker"

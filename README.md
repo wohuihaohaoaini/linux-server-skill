@@ -274,6 +274,9 @@ bash ~/.cursor/skills/linux-server-ops/scripts/sync-context.sh staging
 | `service-control.sh boot-check` | Verify ALL services have auto-start configured |
 | `service-control.sh boot-fix` | Enable auto-start for all detected services |
 | `service-control.sh logs <name> [n]` | View last N log lines |
+| `backup.sh run` / `list` / `verify` / `extract <id>` | Full backup (files, configs, certs, MySQL/PostgreSQL/Redis), offsite via rclone, integrity check, safe restore staging |
+| `release.sh snapshot <name>` / `rollback <name>` | Snapshot an app before deploy; one-command rollback + restart |
+| `notify.sh "<title>" "<msg>" [level]` | Alerts to WeCom / DingTalk / Feishu / Telegram / Bark / Slack |
 
 ---
 
@@ -285,10 +288,11 @@ bash ~/.cursor/skills/linux-server-ops/scripts/sync-context.sh staging
 | `distro-guide.md` | Ubuntu / Debian / CentOS / RHEL / Alpine / Arch differences |
 | `deploy-guide.md` | Full deployment workflows: Static, Node.js, Java, Python, PHP, Docker, DB |
 | `waf-guide.md` | ModSecurity, OWASP CRS, rate limiting, IP management, DDoS mitigation |
-| `monitoring-guide.md` | System metrics, alerting, Netdata, Uptime Kuma, watchdog |
+| `monitoring-guide.md` | Webhook alerts, external uptime monitoring, health endpoints, diagnosis order, scaling, swap |
+| `backup-guide.md` | Backups, offsite copies, restore procedures and drills, deploy rollback |
 | `log-guide.md` | Log viewing, search, rotation, GoAccess, Loki/Promtail |
 | `file-ops-guide.md` | File manager: browse, edit, permissions, compress, transfer |
-| `security-guide.md` | SSH hardening, auditd, kernel tuning, intrusion detection, backups |
+| `security-guide.md` | SSH hardening, auditd, kernel tuning, intrusion detection |
 | `user-management-guide.md` | Users, groups, sudo, SSH keys, SFTP chroot, session auditing |
 
 ---

@@ -280,11 +280,13 @@ cat > /opt/server-tools/watchdog.sh << 'SCRIPT'
 # Simple watchdog — check and restart dead services
 LOG="/var/log/watchdog.log"
 timestamp() { date '+%Y-%m-%d %H:%M:%S'; }
+notify() { bash /opt/server-tools/notify.sh "$@" >/dev/null 2>&1 || true; }
 
 check_nginx() {
   if ! systemctl is-active --quiet nginx; then
     echo "$(timestamp) nginx DOWN - restarting" >> $LOG
     systemctl restart nginx
+    notify "nginx was down — auto-restarted" "$(systemctl is-active nginx)" critical
   fi
 }
 
@@ -292,6 +294,7 @@ check_pm2() {
   if ! pm2 status 2>/dev/null | grep -q "online"; then
     echo "$(timestamp) PM2 apps check failed" >> $LOG
     pm2 resurrect
+    notify "PM2 apps were down — resurrected" "$(pm2 jlist 2>/dev/null | jq -r '.[] | .name + ": " + .pm2_env.status' 2>/dev/null)" critical
   fi
 }
 
@@ -300,6 +303,7 @@ check_service() {
   if ! systemctl is-active --quiet $name; then
     echo "$(timestamp) $name DOWN - restarting" >> $LOG
     systemctl restart $name
+    notify "$name was down — auto-restarted" "now: $(systemctl is-active $name)" critical
   fi
 }
 
@@ -359,48 +363,111 @@ docker run -d --restart=unless-stopped \
 
 ## Alerting
 
-### Email alerts via cron (simple)
+Cloud VPS providers block outbound port 25 and most servers have no mail server, so `mail`-based alerts silently never arrive. Use `scripts/notify.sh` — it posts to a chat webhook.
+
+### Set up notify.sh
+
+| `NOTIFY_TYPE` | Where to get the URL |
+|---|---|
+| `wecom` (企业微信) | Group → Add group robot → webhook URL |
+| `dingtalk` (钉钉) | Group settings → Smart assistant → Custom robot (security: IP allowlist with the server's public IP) |
+| `feishu` (飞书) | Group settings → Bots → Custom bot → webhook URL |
+| `telegram` | `@BotFather` token + your chat ID (`TELEGRAM_TOKEN`, `TELEGRAM_CHAT_ID`) |
+| `bark` (iOS push) | Bark app → `https://api.day.app/<key>` |
+| `slack` / `webhook` | Incoming webhook URL / any endpoint accepting JSON |
+
+The webhook URL is a secret. Have the **user** write the config in their own terminal (`ssh -t … 'sudo nano /etc/server-tools/notify.conf'`), or pipe it over stdin — never echo it in chat:
 
 ```bash
-# Install mailutils
-apt-get install -y mailutils 2>/dev/null || dnf install -y mailx 2>/dev/null
-
-# High CPU alert (>90% for 5 min)
-cat > /opt/server-tools/alert-cpu.sh << 'SCRIPT'
-#!/bin/bash
-THRESHOLD=90
-EMAIL="admin@yourdomain.com"
-CPU=$(top -bn1 | grep "Cpu(s)" | awk '{print 100-$8}' | cut -d. -f1)
-if [ "$CPU" -gt "$THRESHOLD" ]; then
-  echo "CPU at ${CPU}% on $(hostname) at $(date)" | \
-    mail -s "ALERT: High CPU on $(hostname)" $EMAIL
-fi
-SCRIPT
-
-# Disk full alert (>85%)
-cat > /opt/server-tools/alert-disk.sh << 'SCRIPT'
-#!/bin/bash
-THRESHOLD=85
-EMAIL="admin@yourdomain.com"
-df -h | grep -vE "^Filesystem|tmpfs|udev" | awk '{print $5 " " $6}' | while read output; do
-  usage=$(echo $output | awk '{print $1}' | cut -d% -f1)
-  partition=$(echo $output | awk '{print $2}')
-  if [ "$usage" -gt "$THRESHOLD" ]; then
-    echo "Disk $partition at ${usage}% on $(hostname)" | \
-      mail -s "ALERT: Disk full on $(hostname)" $EMAIL
-  fi
-done
-SCRIPT
-chmod +x /opt/server-tools/alert-*.sh
-
-# Add to cron
-echo "*/10 * * * * root bash /opt/server-tools/alert-cpu.sh" >> /etc/cron.d/alerts
-echo "0 * * * * root bash /opt/server-tools/alert-disk.sh" >> /etc/cron.d/alerts
+ssh … 'sudo mkdir -p /etc/server-tools && sudo tee /etc/server-tools/notify.conf >/dev/null && sudo chmod 600 /etc/server-tools/notify.conf' <<'EOF'
+NOTIFY_TYPE=wecom
+NOTIFY_URL=<paste webhook URL>
+NOTIFY_MIN_LEVEL=info
+EOF
+ssh … 'sudo bash /opt/server-tools/notify.sh --test'
 ```
+
+### Severity levels
+
+| Level | Meaning | Response | Examples |
+|---|---|---|---|
+| `critical` | Users are affected now | Act immediately | Site down, service crash-looping, disk >95%, backup failed |
+| `warning` | Will become critical if ignored | Investigate today | Disk >85%, cert expires <14 days, memory >90% for 10 min |
+| `info` | Good to know | Review daily | Backup OK, auto-restart succeeded, deploy finished |
+
+Set `NOTIFY_MIN_LEVEL=warning` to silence routine `info` messages. An alert channel that fires constantly gets muted — only page for things that need a human.
+
+### Resource alerts
+
+```bash
+ssh … 'sudo tee /opt/server-tools/resource-alert.sh >/dev/null' <<'SCRIPT'
+#!/bin/bash
+# Disk, memory and load checks → notify.sh. Run from cron every 10 minutes.
+N=/opt/server-tools/notify.sh
+STATE=/var/tmp/resource-alert.state; touch "$STATE"
+
+# Alert once per problem, not every 10 minutes
+alert_once() {  # key level title message
+  grep -qxF "$1" "$STATE" && return
+  echo "$1" >> "$STATE"; bash "$N" "$3" "$4" "$2"
+}
+clear_key() { sed -i "/^$1\$/d" "$STATE"; }
+
+while read -r use mount; do
+  use=${use%\%}; key="disk:$mount"
+  if   [ "$use" -ge 95 ]; then alert_once "$key:crit" critical "Disk $mount at ${use}%" "$(du -xsh /var/log /var/lib/docker /var/backups 2>/dev/null)"
+  elif [ "$use" -ge 85 ]; then alert_once "$key:warn" warning  "Disk $mount at ${use}%" "Clean logs/backups or grow the disk"
+  else clear_key "$key:crit"; clear_key "$key:warn"; fi
+done < <(df -P -x tmpfs -x devtmpfs -x overlay | awk 'NR>1{print $5, $6}')
+
+mem=$(free | awk '/^Mem:/{printf "%d", ($2-$7)*100/$2}')
+if [ "$mem" -ge 90 ]; then alert_once mem warning "Memory at ${mem}%" "$(ps aux --sort=-%mem | head -6)"
+else clear_key mem; fi
+
+load=$(cut -d' ' -f1 /proc/loadavg); cores=$(nproc)
+if awk -v l="$load" -v c="$cores" 'BEGIN{exit !(l > c*2)}'; then
+  alert_once load warning "Load $load on $cores cores" "$(ps aux --sort=-%cpu | head -6)"
+else clear_key load; fi
+SCRIPT
+ssh … 'sudo chmod +x /opt/server-tools/resource-alert.sh && echo "*/10 * * * * root bash /opt/server-tools/resource-alert.sh" | sudo tee /etc/cron.d/resource-alert'
+```
+
+### External uptime monitoring (do this first)
+
+Everything above runs **on the server**. When the server itself dies — kernel panic, provider outage, network cut, out of memory — those scripts die with it and nobody is told. The monitor must live somewhere else.
+
+| Option | Cost | Notes |
+|---|---|---|
+| [UptimeRobot](https://uptimerobot.com) / Better Stack / Freshping | Free tier | 5-min HTTP/keyword checks, alerts to email, Telegram, webhooks |
+| [Uptime Kuma](https://github.com/louislam/uptime-kuma) on a **different** server | Free, self-hosted | Rich UI, 企业微信/钉钉/飞书 built in |
+| 阿里云云监控 / 腾讯云云拨测 | Free tier | Checks from multiple regions inside China |
+
+Monitor the **health endpoint** (below) with a keyword check, not just the home page, and also add an SSL-expiry monitor per domain.
+
+### Health endpoints: liveness vs readiness
+
+A `200` from the home page does not prove the app works — Nginx can serve a cached page while the backend's database connection is dead. Give every service two endpoints:
+
+| Endpoint | Answers | Checks | Used by |
+|---|---|---|---|
+| `/healthz` (liveness) | Is the process alive and not stuck? | Nothing external — just return `ok` | Process manager / watchdog: restart if this fails |
+| `/readyz` (readiness) | Can it serve real requests? | DB query `SELECT 1`, Redis `PING`, required APIs — each with a short timeout (≤2 s) | Deploy verification, external uptime monitor |
+
+- Do **not** fail liveness when a shared dependency (DB) is down — restarting the app won't fix the DB and causes restart storms.
+- Return only `ok` / `fail` and a status code publicly; keep error details in logs. If the endpoint reveals internals, restrict it: `location /readyz { allow 127.0.0.1; deny all; proxy_pass …; }` and let the external monitor check a keyword on a public page instead.
+- Static sites: check for a keyword that only appears in the real page (catches "default nginx page" and empty-deploy mistakes).
 
 ---
 
 ## Common Issues & Diagnosis
+
+Work through problems in this order — each step is cheap and rules out a whole class of causes before you dig deeper (see "Diagnosis Order" in SKILL.md):
+
+1. **Running?** `service-control.sh status <name>` · `pm2 status` · `systemctl status <name>`
+2. **Logs?** `service-control.sh logs <name> 200` · `journalctl -u <name> -n 100` · `/var/log/nginx/error.log`
+3. **Resources?** `df -h` · `df -i` · `free -h` · `uptime` · `dmesg | grep -i oom`
+4. **Network?** `ss -tlnp | grep <port>` · `curl -v localhost:<port>/readyz` · `dig +short <domain>` · firewall rules
+5. **Dependencies?** DB/Redis reachable and not full · external APIs · certificate validity
 
 | Problem | Commands |
 |---------|----------|
@@ -412,3 +479,34 @@ echo "0 * * * * root bash /opt/server-tools/alert-disk.sh" >> /etc/cron.d/alerts
 | SSL expired | `certbot renew`, check `certbot.timer` |
 | OOM kills | `dmesg \| grep -i oom`, increase server RAM or reduce app memory |
 | Many TIME_WAIT | `ss -s`, tune `net.ipv4.tcp_fin_timeout` in `/etc/sysctl.conf` |
+| Disk full but `du` finds nothing | Deleted files still held open: `lsof +L1`; restart the holder |
+| `No space left` with free space | Inodes exhausted: `df -i`; find the dir: `find / -xdev -type f | cut -d/ -f2-3 | sort | uniq -c | sort -rn | head` |
+
+---
+
+## Scaling & Capacity Decisions
+
+Measure before you scale — most "the server is too small" problems are a leak, a missing index or a bad config.
+
+| Symptom | Check first | Then |
+|---|---|---|
+| CPU pegged | `ps aux --sort=-%cpu`; one runaway process? a crawler hammering one URL? | PM2 cluster mode (`-i max`), Nginx caching / rate limiting, then more cores |
+| Memory climbing over days | Same process growing steadily → leak; fix it or schedule `pm2 reload` / `max_memory_restart` | — |
+| OOM kills on a 1–2 GB VPS | Builds (`npm run build`, Maven) on the server? | Add swap (below); build in CI and ship artifacts |
+| Slow responses, low CPU | DB slow query log, missing indexes, N+1 queries, upstream API latency | Fix the query; add Redis caching |
+| Disk filling | Logs, Docker images (`docker system df`), old backups | logrotate, `docker image prune`, backups offsite |
+| Steady growth near limits | All of the above already fine | Vertical first (bigger VPS — quick, no code change), horizontal (load balancer + 2 app servers + shared DB) when one box can't hold it or you need redundancy |
+
+### Swap for small servers
+
+```bash
+ssh … 'bash -s' <<'EOF'
+swapon --show | grep -q . && { echo "swap already on"; swapon --show; exit 0; }
+sudo fallocate -l 2G /swapfile || sudo dd if=/dev/zero of=/swapfile bs=1M count=2048
+sudo chmod 600 /swapfile && sudo mkswap /swapfile && sudo swapon /swapfile
+grep -q '^/swapfile' /etc/fstab || echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
+echo 'vm.swappiness=10' | sudo tee /etc/sysctl.d/99-swappiness.conf && sudo sysctl -p /etc/sysctl.d/99-swappiness.conf
+EOF
+```
+
+Swap is a safety net against OOM kills, not extra RAM — if the server is constantly swapping, it needs more memory.

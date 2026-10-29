@@ -138,16 +138,16 @@ install_core_tools() {
   info "Installing core tools..."
   case "$DISTRO_ID" in
     ubuntu|debian|raspbian)
-      install_packages curl wget git jq htop unzip logrotate ca-certificates gnupg lsb-release
+      install_packages curl wget git jq rsync htop unzip logrotate ca-certificates gnupg lsb-release
       ;;
     centos|rhel|rocky|almalinux|fedora)
-      install_packages curl wget git jq htop unzip logrotate ca-certificates
+      install_packages curl wget git jq rsync htop unzip logrotate ca-certificates
       ;;
     alpine)
-      install_packages curl wget git jq htop unzip logrotate bash shadow
+      install_packages curl wget git jq rsync htop unzip logrotate bash shadow
       ;;
     arch|manjaro)
-      install_packages curl wget git jq htop unzip logrotate
+      install_packages curl wget git jq rsync htop unzip logrotate
       ;;
   esac
   log "Core tools installed"

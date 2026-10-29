@@ -9,8 +9,9 @@ Full deployment workflows for every service type.
 - [ ] SSH access verified
 - [ ] Domain DNS A record → server IP (if using SSL)
 - [ ] Server initialized (`check-system.sh` run)
-- [ ] Service registry (`/etc/server-registry.json`) exists
 - [ ] Log directory created: `mkdir -p /var/log/apps/<name>`
+- [ ] **Updating an existing app?** Snapshot first: `release.sh snapshot <name>` (see [backup-guide.md](backup-guide.md))
+- [ ] Database migration in this release? Take a DB backup first: `backup.sh run`
 
 ---
 
@@ -1231,6 +1232,37 @@ docker compose up -d                # start (or recreate changed)
 docker compose stop
 docker compose logs -f --tail=100
 ```
+
+---
+
+## Post-Deploy Verification & Rollback
+
+A deploy is done only when all of these pass. If any fails, roll back first and debug second — users should not wait while you investigate.
+
+```bash
+ssh … 'bash -s' <<'EOF'
+NAME=<name>; PORT=<port>; DOMAIN=<domain>
+set -e
+sudo nginx -t
+sudo bash /opt/server-tools/service-control.sh status "$NAME"
+# Readiness: the app answers AND its dependencies work (see monitoring-guide.md → Health endpoints)
+for i in $(seq 1 15); do curl -fsS --max-time 3 "http://127.0.0.1:$PORT/readyz" && break; sleep 2; done
+# Public path through Nginx + TLS; check for a keyword that only the real page contains
+curl -fsS --max-time 10 "https://$DOMAIN/" | grep -q '<expected keyword>'
+# No new errors right after start
+sudo bash /opt/server-tools/service-control.sh logs "$NAME" 50 | grep -iE 'error|exception|fatal' || echo "no errors in recent log"
+EOF
+```
+
+No `/readyz` endpoint yet? Use the cheapest real request instead (an API route that touches the DB), and suggest adding one.
+
+**Failed?**
+
+```bash
+ssh … 'sudo bash /opt/server-tools/release.sh rollback <name>'
+```
+
+Then record the deploy: `service-registry.sh set <name> '{…"git_commit":"<sha>"}'` (updates the index) and sync the local snapshot.
 
 ---
 

@@ -400,41 +400,11 @@ ls -la /etc/cron.{daily,weekly,monthly,hourly}/ 2>/dev/null
 
 ## Backup Strategy
 
+Use `scripts/backup.sh` — full guide in [backup-guide.md](backup-guide.md): app files, configs, certificates, MySQL/PostgreSQL/Redis dumps, checksums, offsite copy via rclone, failure alerts, and restore procedures.
+
 ```bash
-# Simple daily backup script
-cat > /opt/server-tools/backup.sh << 'SCRIPT'
-#!/bin/bash
-BACKUP_DIR="/var/backups/apps"
-DATE=$(date +%Y%m%d_%H%M%S)
-KEEP_DAYS=7
-mkdir -p $BACKUP_DIR
-
-# Backup web apps
-tar -czf "$BACKUP_DIR/www-$DATE.tar.gz" /var/www/ 2>/dev/null
-
-# Backup service registry
-cp /etc/server-registry.json "$BACKUP_DIR/registry-$DATE.json"
-
-# Backup Nginx configs
-tar -czf "$BACKUP_DIR/nginx-$DATE.tar.gz" /etc/nginx/ 2>/dev/null
-
-# Backup systemd units
-tar -czf "$BACKUP_DIR/systemd-$DATE.tar.gz" /etc/systemd/system/*.service 2>/dev/null
-
-# Backup databases
-# mysqldump -u root -p<password> --all-databases > "$BACKUP_DIR/mysql-$DATE.sql"
-# pg_dumpall -U postgres > "$BACKUP_DIR/postgres-$DATE.sql"
-
-# Remove old backups
-find $BACKUP_DIR -mtime +$KEEP_DAYS -delete
-
-echo "Backup completed: $BACKUP_DIR/*-$DATE.*"
-SCRIPT
-chmod 700 /opt/server-tools/backup.sh
-
-# Run daily at 3am
-echo "0 3 * * * root bash /opt/server-tools/backup.sh >> /var/log/backup.log 2>&1" \
-  > /etc/cron.d/daily-backup
+ssh … 'sudo bash /opt/server-tools/backup.sh run && sudo bash /opt/server-tools/backup.sh verify'
+ssh … "echo '30 3 * * * root bash /opt/server-tools/backup.sh run >> /var/log/backup.log 2>&1' | sudo tee /etc/cron.d/server-backup"
 ```
 
 ---
